@@ -1,0 +1,51 @@
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Data & Models (large files)
+data/
+
+
+alerts/*.json
+
+# Temporary/Test files
+loader.py
+cam.py
+check_system.py
+quick/
+*.sqlite3
+*.db
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+.gitignore
+
+# Environment variables
+.env
+.env.local
