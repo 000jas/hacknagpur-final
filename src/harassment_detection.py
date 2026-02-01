@@ -5,7 +5,13 @@ import time
 from collections import defaultdict, deque
 from ultralytics import YOLO
 from interaction_features import extract_sequence_features
-from config import ALERT_COOLDOWN
+from config import ALERT_COOLDOWN, save_alert, update_detection_status, get_camera_label
+
+# Verify that save_alert is properly imported
+print(f"[STARTUP] save_alert function loaded: {save_alert}")
+
+# Global variable to track the current video source for alerts
+CURRENT_VIDEO_SOURCE = 0
 
 # Load sequence-based harassment detection model (v2 - 85% accuracy)
 model = joblib.load("models/harassment_detector_v2.pkl")
@@ -123,19 +129,42 @@ def blur_face(frame, bbox, keypoints=None, scale=1.2):
 
 def alert_harassment(person_id, risk_score, frame, bbox=None):
     """Send alert for detected harassment pattern"""
+    global CURRENT_VIDEO_SOURCE
     current_time = time.time()
     
     # Check cooldown
     if current_time - last_alert_time[person_id] < ALERT_COOLDOWN:
-        return
+        return False  # Alert not triggered due to cooldown
+    
+    # Get camera/source label
+    source_label = get_camera_label(CURRENT_VIDEO_SOURCE)
     
     print(f"\n{'='*70}")
     print(f"🚨 HARASSMENT PATTERN DETECTED!")
+    print(f"   Source: {source_label}")
     print(f"   Person ID: {person_id}")
     print(f"   Confidence: {risk_score:.1%}")
     print(f"   Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"   Pattern: Sustained suspicious behavior over {SEQUENCE_LENGTH} frames")
     print(f"{'='*70}\n")
+    
+    # Save alert to shared file for dashboard
+    alert_data = {
+        "person_id": person_id,
+        "risk_score": risk_score,
+        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "timestamp_unix": current_time,
+        "source": source_label,
+        "video_source_raw": str(CURRENT_VIDEO_SOURCE),
+        "pattern": f"Sustained suspicious behavior over {SEQUENCE_LENGTH} frames",
+        "alert_type": "HARASSMENT DETECTED"
+    }
+    print(f"[REALTIME] Saving alert to dashboard...")
+    success = save_alert(alert_data)
+    if success:
+        print(f"[REALTIME] ✅ Alert saved successfully! Check dashboard now.")
+    else:
+        print(f"[REALTIME] ❌ FAILED to save alert!")
     
     # Visual alert on frame
     if bbox is not None:
@@ -143,8 +172,8 @@ def alert_harassment(person_id, risk_score, frame, bbox=None):
         # Draw thick red box for harassment detection
         cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 4)
         
-        # Add warning label
-        warning_text = f"HARASSMENT RISK: {risk_score:.0%}"
+        # Add warning label with source
+        warning_text = f"HARASSMENT RISK: {risk_score:.0%} [{source_label}]"
         cv2.putText(frame, warning_text,
                    (int(x1), int(y1)-30),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 3)
@@ -152,6 +181,8 @@ def alert_harassment(person_id, risk_score, frame, bbox=None):
     last_alert_time[person_id] = current_time
     # Keep the visual alert (red box) visible for a short period after alerting
     alert_display_until[person_id] = current_time + ALERT_DISPLAY_SECONDS
+    
+    return True  # Alert successfully triggered
 
 
 def draw_interaction_line(frame, person1_kp, person2_kp, distance, color):
@@ -179,15 +210,24 @@ def run_harassment_detection(video_source=0):
     Args:
         video_source: 0 for webcam, or path to video file
     """
+    global CURRENT_VIDEO_SOURCE
+    CURRENT_VIDEO_SOURCE = video_source
+    
     cap = cv2.VideoCapture(video_source)
     
     if not cap.isOpened():
         print(f"Error: Could not open video source {video_source}")
+        update_detection_status(False, video_source)
         return
+    
+    # Update detection status as running
+    source_label = get_camera_label(video_source)
+    update_detection_status(True, video_source)
     
     print("="*70)
     print("🛡️  CivicGuard - Temporal Harassment Detection System")
     print("="*70)
+    print(f"\n📹 Video Source: {source_label}")
     print("\n📊 System Configuration:")
     print(f"   - Sequence Length: {SEQUENCE_LENGTH} frames")
     print(f"   - Detection Threshold: {HARASSMENT_THRESHOLD:.0%}")
@@ -268,7 +308,6 @@ def run_harassment_detection(video_source=0):
             elif risk_score >= HARASSMENT_THRESHOLD:
                 box_color = (0, 0, 255)  # Red - high risk
                 skeleton_color = (0, 0, 255)
-                detection_count += 1
             elif risk_score >= 0.5:
                 box_color = (0, 165, 255)  # Orange - medium risk
                 skeleton_color = (0, 165, 255)
@@ -305,7 +344,10 @@ def run_harassment_detection(video_source=0):
             
             # Alert if threshold exceeded
             if risk_score >= HARASSMENT_THRESHOLD:
-                alert_harassment(person_id, risk_score, frame, (x1, y1, x2, y2))
+                alert_triggered = alert_harassment(person_id, risk_score, frame, (x1, y1, x2, y2))
+                if alert_triggered:
+                    detection_count += 1
+                    harassment_detected = True  # Mark harassment as detected
         
         # Draw interaction indicators
         if len(current_keypoints) >= 2:
@@ -352,8 +394,12 @@ def run_harassment_detection(video_source=0):
     cap.release()
     cv2.destroyAllWindows()
     
+    # Update status as stopped
+    update_detection_status(False, video_source)
+    
     print(f"\n{'='*70}")
     print(f"📊 Session Summary:")
+    print(f"   Video Source: {get_camera_label(video_source)}")
     print(f"   Total Frames: {frame_count}")
     print(f"   Harassment Alerts: {detection_count}")
     print(f"{'='*70}")

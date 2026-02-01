@@ -1,0 +1,10 @@
+{
+  "alerts": [],
+  "last_updated": 1769936718.321897,
+  "is_threat_active": false,
+  "current_threat": null,
+  "camera_source": "samplevideo.mp4",
+  "total_alert_count": 0,
+  "is_running": false,
+  "threat_level": 0.0
+}

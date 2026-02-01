@@ -25,5 +25,9 @@ python-multipart>=0.0.6     # File uploads support
 # Visualization (optional)
 matplotlib>=3.7.0           # Plotting
 
+# Dashboard (Streamlit)
+streamlit>=1.30.0           # Interactive dashboard
+plotly>=5.18.0              # Interactive charts and graphs
+
 # Dataset (optional)
 kagglehub                   # UCF Crime Dataset download
