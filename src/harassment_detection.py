@@ -30,6 +30,10 @@ POSE_CONNECTIONS = [
 # Harassment detection threshold
 HARASSMENT_THRESHOLD = 0.75  # Higher threshold for sequence-based detection
 
+# How long to visually keep a red alert box after an alert (seconds)
+ALERT_DISPLAY_SECONDS = 3.0
+alert_display_until = defaultdict(float)
+
 
 def draw_pose_skeleton(frame, keypoints, color=(0, 255, 0)):
     """Draw pose skeleton with connections"""
@@ -51,6 +55,70 @@ def draw_pose_skeleton(frame, keypoints, color=(0, 255, 0)):
     for point in keypoints:
         if point[0] > 0 and point[1] > 0:
             cv2.circle(frame, tuple(point.astype(int)), 4, (0, 255, 255), -1)
+
+
+def blur_face(frame, bbox, keypoints=None, scale=1.2):
+    """Blur an approximate face region inside the person's bbox.
+    Uses a slightly smaller crop (shorter height) and a gentler blur kernel for better visibility/privacy tradeoff.
+    If head keypoints are available, use them to center the face crop; otherwise use the top portion of bbox.
+    """
+    x1, y1, x2, y2 = bbox
+    h = max(1, y2 - y1)
+    w = max(1, x2 - x1)
+
+    # Prefer head keypoints if available
+    fx1, fy1, fx2, fy2 = x1, y1, x1 + w, y1 + int(0.18 * h)
+    try:
+        if keypoints is not None and len(keypoints) >= 3:
+            head_idxs = [0, 1, 2]
+            pts = [keypoints[i] for i in head_idxs if i < len(keypoints) and keypoints[i][0] > 0]
+            if len(pts) > 0:
+                xs = [int(p[0]) for p in pts]
+                ys = [int(p[1]) for p in pts]
+                cx = int(np.mean(xs))
+                cy = int(np.mean(ys))
+                # slightly narrower and shorter face box
+                face_w = int(w * 0.30)
+                face_h = int(h * 0.18)
+                fx1 = cx - face_w
+                fx2 = cx + face_w
+                fy1 = cy - face_h
+                fy2 = cy + face_h
+    except Exception:
+        # Fallback to top portion of bbox (shorter height)
+        fx1, fy1, fx2, fy2 = x1, y1, x2, y1 + int(0.18 * h)
+
+    # Expand region slightly (scale is reduced)
+    cx = (fx1 + fx2) // 2
+    cy = (fy1 + fy2) // 2
+    fw = int((fx2 - fx1) * scale)
+    fh = int((fy2 - fy1) * scale)
+
+    nx1 = max(0, cx - fw // 2)
+    ny1 = max(0, cy - fh // 2)
+    nx2 = min(frame.shape[1], cx + fw // 2)
+    ny2 = min(frame.shape[0], cy + fh // 2)
+
+    if nx2 <= nx1 or ny2 <= ny1:
+        return
+
+    roi = frame[ny1:ny2, nx1:nx2]
+    if roi.size == 0:
+        return
+
+    # Choose a stronger blur: larger odd kernel proportional to region size
+    # Ensure kernel is at least 5 and odd so blur is visibly stronger
+    kx = max(5, (nx2 - nx1) // 3)
+    ky = max(5, (ny2 - ny1) // 3)
+    if kx % 2 == 0:
+        kx += 1
+    if ky % 2 == 0:
+        ky += 1
+
+    # Increase sigma for stronger blur but cap to a reasonable value
+    sigma = max(1.5, min(12.0, float(max(kx, ky))))
+    blurred = cv2.GaussianBlur(roi, (kx, ky), sigma)
+    frame[ny1:ny2, nx1:nx2] = blurred
 
 
 def alert_harassment(person_id, risk_score, frame, bbox=None):
@@ -82,6 +150,8 @@ def alert_harassment(person_id, risk_score, frame, bbox=None):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 3)
     
     last_alert_time[person_id] = current_time
+    # Keep the visual alert (red box) visible for a short period after alerting
+    alert_display_until[person_id] = current_time + ALERT_DISPLAY_SECONDS
 
 
 def draw_interaction_line(frame, person1_kp, person2_kp, distance, color):
@@ -134,6 +204,8 @@ def run_harassment_detection(video_source=0):
             break
         
         frame_count += 1
+        # current timestamp used for alert display timing
+        current_time = time.time()
         
         # Run YOLO pose detection
         results = pose_model(frame, verbose=False)
@@ -186,9 +258,14 @@ def run_harassment_detection(video_source=0):
             
             # Get risk score
             risk_score = harassment_scores.get(person_id, 0.0)
-            
-            # Determine color based on risk
-            if risk_score >= HARASSMENT_THRESHOLD:
+
+            # If an alert was recently raised for this person, keep the box red for visibility
+            is_alert_active = current_time < alert_display_until.get(person_id, 0.0)
+
+            if is_alert_active:
+                box_color = (0, 0, 255)  # Red - active alert
+                skeleton_color = (0, 0, 255)
+            elif risk_score >= HARASSMENT_THRESHOLD:
                 box_color = (0, 0, 255)  # Red - high risk
                 skeleton_color = (0, 0, 255)
                 detection_count += 1
@@ -201,6 +278,14 @@ def run_harassment_detection(video_source=0):
             
             # Draw bounding box
             thickness = 3 if risk_score >= HARASSMENT_THRESHOLD else 2
+
+            # Privacy: Blur face for low-risk people
+            if risk_score < HARASSMENT_THRESHOLD:
+                try:
+                    blur_face(frame, (x1, y1, x2, y2), keypoints)
+                except Exception:
+                    pass
+
             cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, thickness)
             
             # Draw pose skeleton
@@ -275,4 +360,24 @@ def run_harassment_detection(video_source=0):
 
 
 if __name__ == "__main__":
-    run_harassment_detection(0)
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Run CivicGuard harassment detection on webcam or video file.")
+    parser.add_argument('source', nargs='?', default=None, help='Path to video file. Omit to use webcam (default)')
+    args = parser.parse_args()
+
+    if args.source is None:
+        print("No video provided — using webcam (device 0).")
+        run_harassment_detection(0)
+    else:
+        src = args.source
+        if src.isdigit():
+            src_val = int(src)
+        else:
+            if not os.path.exists(src):
+                print(f"Error: video file '{src}' not found.")
+                raise SystemExit(1)
+            src_val = src
+        print(f"Using video source: {src}")
+        run_harassment_detection(src_val)
