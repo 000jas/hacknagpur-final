@@ -75,8 +75,9 @@ class DetectionService:
     """Detection service using original harassment_detection.py logic with visualization."""
     
     def __init__(self, camera_source=0, alert_interval=20, confidence_threshold=0.70):
-        self.model = joblib.load("models/harassment_detector.pkl")
-        self.scaler = joblib.load("models/sequence_scaler.pkl")
+        # Load models (v2 - 85% accuracy)
+        self.model = joblib.load("models/harassment_detector_v2.pkl")
+        self.scaler = joblib.load("models/harassment_scaler_v2.pkl")
         self.pose_model = YOLO("yolo/yolov8n-pose.pt")
         
         self.alert_interval = alert_interval

@@ -7,9 +7,9 @@ from ultralytics import YOLO
 from interaction_features import extract_sequence_features
 from config import ALERT_COOLDOWN
 
-# Load sequence-based harassment detection model
-model = joblib.load("models/harassment_detector.pkl")
-scaler = joblib.load("models/sequence_scaler.pkl")
+# Load sequence-based harassment detection model (v2 - 85% accuracy)
+model = joblib.load("models/harassment_detector_v2.pkl")
+scaler = joblib.load("models/harassment_scaler_v2.pkl")
 
 # Load YOLO pose model
 pose_model = YOLO("yolo/yolov8n-pose.pt")
